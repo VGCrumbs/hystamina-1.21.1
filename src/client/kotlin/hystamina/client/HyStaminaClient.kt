@@ -72,11 +72,8 @@ object HyStaminaClient : ClientModInitializer {
 	private const val COMPASS_DEATH_DISTANCE_SHOW_ANGLE = 8f
 	private const val COMPASS_DEATH_DISTANCE_COLOR = 0xFFFF9B9B.toInt()
 	private const val COMPASS_SPAWN_LABEL_TEXT = "Spawn"
-	private const val COMPASS_SPAWN_LABEL_Y_GAP = 1
-	private const val COMPASS_SPAWN_LABEL_COLOR = 0xFFF4F8FF.toInt()
-	private const val COMPASS_SPAWN_DISTANCE_Y_GAP = 1
+	private const val COMPASS_SPAWN_LABEL_COLOR = 0xFFF6E7B2.toInt()
 	private const val COMPASS_SPAWN_DISTANCE_SHOW_ANGLE = 8f
-	private const val COMPASS_SPAWN_DISTANCE_COLOR = 0xFFF6E7B2.toInt()
 	private const val COMPASS_MAP_MARKER_SIZE = 10
 	private const val COMPASS_PATTERNED_BANNER_WIDTH = 6
 	private const val COMPASS_PATTERNED_BANNER_HEIGHT = 12
@@ -86,7 +83,7 @@ object HyStaminaClient : ClientModInitializer {
 	private const val BANNER_PATTERN_FACE_HEIGHT = 40
 	private const val COMPASS_MAP_MARKER_Y_OFFSET = -2
 	private const val COMPASS_MAP_INFO_SHOW_ANGLE = 10f
-	private const val COMPASS_MAP_INFO_TOP_OFFSET = COMPASS_HEIGHT + 6
+	private const val COMPASS_MAP_INFO_TOP_OFFSET = (COMPASS_HEIGHT - COMPASS_MAP_MARKER_SIZE) / 2 + COMPASS_MAP_MARKER_Y_OFFSET + COMPASS_MAP_MARKER_SIZE + 1
 	private const val COMPASS_MAP_INFO_LINE_GAP = 2
 	private const val COMPASS_MAP_INFO_MAX_LINES = 3
 	private const val COMPASS_MAP_INFO_COLOR = 0xFFE9F3FF.toInt()
@@ -291,6 +288,7 @@ object HyStaminaClient : ClientModInitializer {
 			drawContext.pose().translate(0f, 0f, 100f)
 			renderCompassMapMarkers(drawContext, client, centerX, startY, player, playerYaw)
 			renderCompassSpawnMarker(drawContext, client, centerX, startY, player, playerYaw)
+			renderCompassFocusedInfo(drawContext, client, centerX, startY, player, playerYaw)
 			renderCompassDeathMarker(drawContext, client, centerX, startY, player, playerYaw)
 			renderCompassPartyMarkers(drawContext, client, centerX, startY, player, playerYaw)
 			drawContext.pose().popPose()
@@ -401,30 +399,60 @@ object HyStaminaClient : ClientModInitializer {
 		val markerAlpha = compassAlphaForX(centerX, marker.x)
 		val markerY = startY + (COMPASS_HEIGHT - COMPASS_SPAWN_RENDER_HEIGHT) / 2 + COMPASS_SPAWN_Y_OFFSET
 		drawCompassSpawnIcon(drawContext, marker.x, markerY, markerAlpha)
+	}
 
-		if (abs(marker.delta) > COMPASS_SPAWN_DISTANCE_SHOW_ANGLE) {
+	private fun renderCompassFocusedInfo(
+		drawContext: net.minecraft.client.gui.GuiGraphics,
+		client: Minecraft,
+		centerX: Int,
+		startY: Int,
+		player: net.minecraft.world.entity.player.Player,
+		playerYaw: Float
+	) {
+		val infoLines = mutableListOf<CompassFocusedInfoLine>()
+
+		val spawnMarker = getCompassSpawnMarker(centerX, player, playerYaw)
+		if (spawnMarker != null && abs(spawnMarker.delta) <= COMPASS_SPAWN_DISTANCE_SHOW_ANGLE) {
+			infoLines += CompassFocusedInfoLine(
+				text = "$COMPASS_SPAWN_LABEL_TEXT: ${formatCompassDistance(spawnMarker.distanceBlocks)}",
+				color = COMPASS_SPAWN_LABEL_COLOR,
+				alpha = compassAlphaForX(centerX, spawnMarker.x),
+				distanceBlocks = spawnMarker.distanceBlocks
+			)
+		}
+
+		for (waypoint in getHeldMapWaypoints(client, player, centerX, playerYaw)) {
+			if (abs(waypoint.delta) > COMPASS_MAP_INFO_SHOW_ANGLE) {
+				continue
+			}
+
+			infoLines += CompassFocusedInfoLine(
+				text = "${waypoint.name.string}: ${formatCompassDistance(waypoint.distanceBlocks)}",
+				color = COMPASS_MAP_INFO_COLOR,
+				alpha = compassAlphaForX(centerX, waypoint.x),
+				distanceBlocks = waypoint.distanceBlocks
+			)
+		}
+
+		val focusedInfoLines = infoLines
+			.sortedBy { it.distanceBlocks }
+			.take(COMPASS_MAP_INFO_MAX_LINES)
+		if (focusedInfoLines.isEmpty()) {
 			return
 		}
 
-		val spawnLabelY = markerY + COMPASS_SPAWN_RENDER_HEIGHT + COMPASS_SPAWN_LABEL_Y_GAP
-		drawContext.drawString(
-			client.font,
-			COMPASS_SPAWN_LABEL_TEXT,
-			marker.x - client.font.width(COMPASS_SPAWN_LABEL_TEXT) / 2,
-			spawnLabelY,
-			withAlpha(COMPASS_SPAWN_LABEL_COLOR, markerAlpha),
-			true
-		)
-
-		val distanceText = formatCompassDistance(marker.distanceBlocks)
-		drawContext.drawString(
-			client.font,
-			distanceText,
-			marker.x - client.font.width(distanceText) / 2,
-			spawnLabelY + client.font.lineHeight + COMPASS_SPAWN_DISTANCE_Y_GAP,
-			withAlpha(COMPASS_SPAWN_DISTANCE_COLOR, markerAlpha),
-			true
-		)
+		var textY = startY + COMPASS_MAP_INFO_TOP_OFFSET
+		for (infoLine in focusedInfoLines) {
+			drawContext.drawString(
+				client.font,
+				infoLine.text,
+				centerX - client.font.width(infoLine.text) / 2,
+				textY,
+				withAlpha(infoLine.color, infoLine.alpha),
+				true
+			)
+			textY += client.font.lineHeight + COMPASS_MAP_INFO_LINE_GAP
+		}
 	}
 
 	private fun renderCompassDeathMarker(
@@ -482,29 +510,6 @@ object HyStaminaClient : ClientModInitializer {
 		for (waypoint in waypoints) {
 			val markerAlpha = compassAlphaForX(centerX, waypoint.x)
 			drawCompassMapMarkerIcon(drawContext, client, waypoint, iconY, markerAlpha)
-		}
-
-		val focusedWaypoints = waypoints
-			.filter { abs(it.delta) <= COMPASS_MAP_INFO_SHOW_ANGLE }
-			.sortedBy { abs(it.delta) }
-			.take(COMPASS_MAP_INFO_MAX_LINES)
-		if (focusedWaypoints.isEmpty()) {
-			return
-		}
-
-		var textY = startY + COMPASS_MAP_INFO_TOP_OFFSET
-		for (waypoint in focusedWaypoints) {
-			val label = "${waypoint.name.string}: ${formatCompassDistance(waypoint.distanceBlocks)}"
-			val labelAlpha = compassAlphaForX(centerX, waypoint.x)
-			drawContext.drawString(
-				client.font,
-				label,
-				centerX - client.font.width(label) / 2,
-				textY,
-				withAlpha(COMPASS_MAP_INFO_COLOR, labelAlpha),
-				true
-			)
-			textY += client.font.lineHeight + COMPASS_MAP_INFO_LINE_GAP
 		}
 	}
 
@@ -1136,6 +1141,7 @@ object HyStaminaClient : ClientModInitializer {
 		val delta: Float,
 		val distanceBlocks: Double
 	)
+	private data class CompassFocusedInfoLine(val text: String, val color: Int, val alpha: Float, val distanceBlocks: Double)
 	private data class CompassDeathMarker(val x: Int, val delta: Float, val distanceBlocks: Double)
 	private data class CompassSpawnMarker(val x: Int, val delta: Float, val distanceBlocks: Double)
 }
